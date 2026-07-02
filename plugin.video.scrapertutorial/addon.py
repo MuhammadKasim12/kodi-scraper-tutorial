@@ -190,28 +190,84 @@ def fetch_html(url):
         return html, resp.geturl()
 
 
+def _flatten_jsonld(data):
+    """Yield every dict found in a JSON-LD payload, including @graph nodes
+    and array entries -- schema.org data can nest either way."""
+    if isinstance(data, list):
+        for item in data:
+            yield from _flatten_jsonld(item)
+    elif isinstance(data, dict):
+        yield data
+        if isinstance(data.get("@graph"), list):
+            yield from _flatten_jsonld(data["@graph"])
+
+
+def find_jsonld_video_url(html):
+    """
+    schema.org VideoObject structured data (JSON-LD) is a standard,
+    widely-used SEO pattern on mainstream/legitimate video sites (news,
+    education, corporate) -- since it's real JSON, parse it properly
+    instead of regex-guessing.
+    """
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            data = json.loads(match.group(1).strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for obj in _flatten_jsonld(data):
+            url = obj.get("contentUrl") or obj.get("embedUrl")
+            if url:
+                return url
+    return None
+
+
 def find_video_url(html, page_url):
     """
     Generic (site-agnostic) direct-video-file finder. This is the "last
-    resort" scraping technique: no site-specific selectors, just pattern
-    -match common ways pages expose a raw video file. It will find plain
-    <video>/<source> tags and og:video meta tags, and bare .mp4/.m3u8
-    links sitting in the HTML/JS. It will NOT defeat sites that load video
-    through DRM, obfuscated JS players, or iframe-embedded third-party
-    players (YouTube, Vimeo, etc.) -- those need a site-specific resolver,
-    same as any real scraper add-on.
+    resort" scraping technique: no site-specific selectors, just standard
+    web patterns for exposing a video: schema.org JSON-LD, plain
+    <video>/<source> tags, og:video/twitter:player:stream meta tags,
+    data-src-style lazy-load attributes, the "file"/"src"/"sources" JSON
+    keys common JS player libraries (JW Player, video.js, Plyr) embed in a
+    <script> block, and bare .mp4/.m3u8/.mpd links anywhere in the
+    HTML/JS. It will NOT defeat DRM or sites that only expose video after
+    running arbitrary JS (no JS engine here) -- those need a site-specific
+    resolver, same as any real scraper add-on.
     """
+    jsonld_url = find_jsonld_video_url(html)
+    if jsonld_url:
+        return urljoin(page_url, jsonld_url.replace("\\/", "/"))
+
+    ext = r"(?:mp4|m3u8|mpd)"
     patterns = [
         r'<video[^>]*>\s*<source[^>]+src=["\']([^"\']+)["\']',
         r'<video[^>]+src=["\']([^"\']+)["\']',
-        r'<meta[^>]+property=["\']og:video(?::url)?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+property=["\']og:video(?::(?:url|secure_url))?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']twitter:player:stream["\'][^>]+content=["\']([^"\']+)["\']',
+        r'\bdata-(?:src|video|url)=["\']([^"\']+?\.' + ext + r'[^"\']*)["\']',
+        r'["\']?(?:file|src)["\']?\s*:\s*["\']([^"\']+?\.' + ext + r'[^"\']*)["\']',
+        r'["\']?sources["\']?\s*:\s*\[\s*\{[^}]*?["\']?(?:file|src)["\']?\s*:\s*["\']([^"\']+)["\']',
         r'["\'](https?://[^"\'\s<>]+?\.m3u8[^"\'\s<>]*)["\']',
+        r'["\'](https?://[^"\'\s<>]+?\.mpd[^"\'\s<>]*)["\']',
         r'["\'](https?://[^"\'\s<>]+?\.mp4[^"\'\s<>]*)["\']',
     ]
     for pattern in patterns:
         match = re.search(pattern, html, re.IGNORECASE)
         if match:
-            return urljoin(page_url, match.group(1))
+            candidate = match.group(1).replace("\\/", "/")  # undo JSON slash-escaping
+            return urljoin(page_url, candidate)
+    return None
+
+
+def find_iframe_url(html, page_url):
+    """First <iframe src> on the page, if any -- many sites embed a
+    third-party player this way instead of a direct <video> tag."""
+    match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if match:
+        return urljoin(page_url, match.group(1))
     return None
 
 
@@ -231,6 +287,16 @@ def resolve_url(target):
         return
 
     stream_url = find_video_url(html, final_url)
+
+    if not stream_url:
+        iframe_url = find_iframe_url(html, final_url)
+        if iframe_url:
+            try:
+                iframe_html, iframe_final_url = fetch_html(iframe_url)
+                stream_url = find_video_url(iframe_html, iframe_final_url)
+            except Exception:
+                pass  # iframe fetch failing just means we fall through to the "not found" case below
+
     if not stream_url:
         xbmcgui.Dialog().notification("Scraper Tutorial", "No direct video found on that page")
         xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())

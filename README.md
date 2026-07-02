@@ -71,11 +71,28 @@ URL.
 ## Part 2: send an arbitrary URL from your phone
 
 The add-on also has a generic `resolve_url` action (`addon.py`) that fetches
-any page you point it at and looks for a direct video file in its HTML
-(`<video>`/`<source>` tags, `og:video` meta tags, bare `.mp4`/`.m3u8` links).
-It's a last-resort, site-agnostic technique — it won't defeat DRM, obfuscated
-JS players, or third-party embeds (YouTube/Vimeo iframes etc.); those need a
-site-specific resolver, same as any real scraper add-on.
+any page you point it at and looks for a direct video file using standard,
+site-agnostic web patterns, checked in this order:
+
+1. **schema.org `VideoObject` JSON-LD** — structured SEO data used by
+   mainstream/legitimate video sites (news, education, corporate); real
+   JSON, so it's parsed properly rather than regex-guessed.
+2. `<video>`/`<source>` tags.
+3. `og:video` / `og:video:url` / `og:video:secure_url` / `twitter:player:stream`
+   meta tags.
+4. `data-src` / `data-video` / `data-url` attributes (common for lazy-loaded
+   `<video>` elements).
+5. `"file"`/`"src"`/`"sources"` JSON keys the way JW Player/video.js/Plyr
+   embed them in a `<script>` block (handles both proper JSON and raw JS
+   object literals with unquoted keys).
+6. One level of `<iframe src>` following — if nothing matches on the main
+   page, fetch the first iframe's target and retry all of the above there.
+7. Bare `.m3u8` / `.mpd` (DASH) / `.mp4` links anywhere in the HTML/JS, as
+   a last resort.
+
+It's still a static-HTML technique — no JS engine, so it won't defeat DRM or
+sites that only expose video after running arbitrary JavaScript; those need
+a site-specific resolver, same as any real scraper add-on.
 
 No app to install and nothing to AirDrop to your phone — the control page
 is served directly by `url-code-service` (Part 4 below) at its `/` route
