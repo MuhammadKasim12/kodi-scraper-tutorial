@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: url-code-service
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    plan: free
+    envVars:
+      - key: PORT
+        value: 8080

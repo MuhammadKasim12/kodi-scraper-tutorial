@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Send URL to Kodi</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+  input, button { font-size: 1rem; padding: 0.6rem; width: 100%; box-sizing: border-box; margin-bottom: 0.75rem; }
+  button { background: #2b6cb0; color: white; border: none; border-radius: 6px; }
+  #status { white-space: pre-wrap; font-size: 0.9rem; color: #444; }
+  label { font-size: 0.85rem; color: #666; }
+</style>
+</head>
+<body>
+  <h2>Send a page to Kodi</h2>
+  <p style="font-size:0.8rem;color:#a00;border:1px solid #a00;padding:0.5rem;border-radius:6px;">
+    Educational purposes only. Only use with content you have the legal
+    right to access.
+  </p>
+
+  <label>Kodi host (IP:port, e.g. 192.168.1.50:8080)</label>
+  <input id="host" placeholder="192.168.1.50:8080">
+
+  <label>Kodi web-server username (leave blank if none)</label>
+  <input id="user">
+
+  <label>Kodi web-server password</label>
+  <input id="pass" type="password">
+
+  <label>Page URL to scrape and play</label>
+  <input id="target" placeholder="https://example.com/some-video-page">
+
+  <button onclick="send()">Send to TV</button>
+
+  <div id="status"></div>
+
+  <hr>
+
+  <h3>Get a 5-digit code to type on the remote</h3>
+  <p style="font-size:0.8rem;color:#666;">
+    Calls your own url-code-service (see url-code-service/ folder) to turn
+    the "Page URL" above into a 5-digit numeric code. Type just that code
+    into Kodi's "[Enter URL manually]" menu instead of a full URL — far
+    faster on a D-pad remote. Each code frees up for reuse after 7 days.
+  </p>
+
+  <label>url-code-service URL (where you deployed it, e.g. https://your-app.fly.dev)</label>
+  <input id="codeService" placeholder="https://your-app.fly.dev">
+
+  <button onclick="shorten()">Get code for "Page URL" above</button>
+  <div id="shortStatus"></div>
+
+<script>
+// Values persist locally on this phone only.
+for (const id of ["host", "user", "pass", "codeService"]) {
+  const el = document.getElementById(id);
+  el.value = localStorage.getItem(id) || "";
+  el.addEventListener("change", () => localStorage.setItem(id, el.value));
+}
+
+async function send() {
+  const host = document.getElementById("host").value.trim();
+  const user = document.getElementById("user").value;
+  const pass = document.getElementById("pass").value;
+  const target = document.getElementById("target").value.trim();
+  const status = document.getElementById("status");
+
+  if (!host || !target) {
+    status.textContent = "Enter both the Kodi host and a page URL.";
+    return;
+  }
+
+  const pluginUrl =
+    "plugin://plugin.video.scrapertutorial/?action=resolve_url&target=" +
+    encodeURIComponent(target);
+
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "Player.Open",
+    params: { item: { file: pluginUrl } },
+  };
+
+  const headers = { "Content-Type": "application/json" };
+  if (user) headers["Authorization"] = "Basic " + btoa(user + ":" + pass);
+
+  status.textContent = "Sending...";
+  try {
+    const res = await fetch(`http://${host}/jsonrpc`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    status.textContent = json.error
+      ? "Kodi error: " + JSON.stringify(json.error)
+      : "Sent. Check the TV.";
+  } catch (e) {
+    status.textContent =
+      "Request failed: " + e.message +
+      "\n\nCheck: phone and TV on same Wi-Fi, Kodi web server enabled, IP:port correct.";
+  }
+}
+
+async function shorten() {
+  const service = document.getElementById("codeService").value.trim().replace(/\/$/, "");
+  const target = document.getElementById("target").value.trim();
+  const shortStatus = document.getElementById("shortStatus");
+
+  if (!service || !target) {
+    shortStatus.textContent = "Enter both the url-code-service URL and a page URL.";
+    return;
+  }
+
+  shortStatus.textContent = "Requesting code...";
+  try {
+    const res = await fetch(`${service}/shorten`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: target }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      shortStatus.textContent = "Service error: " + (json.error || res.status);
+      return;
+    }
+    shortStatus.innerHTML =
+      `<div style="font-size:2rem;letter-spacing:0.2em;text-align:center;margin-top:0.5rem;">${json.code}</div>` +
+      `<div style="text-align:center;color:#666;">type this on the remote — expires in ${json.recycles_in_days} days</div>`;
+  } catch (e) {
+    shortStatus.textContent =
+      "Request failed: " + e.message +
+      "\n\nCheck the service URL is correct and reachable (deployed and awake).";
+  }
+}
+</script>
+</body>
+</html>
