@@ -48,11 +48,11 @@ COLLECTIONS = [
 ]
 
 
-def fetch_json(url):
+def fetch_json(url, timeout=15):
     """Generic HTTP GET -> parsed JSON. Swap this for html.parser/BeautifulSoup
     if the site you're targeting only gives you HTML back."""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -271,6 +271,29 @@ def find_iframe_url(html, page_url):
     return None
 
 
+def resolve_url_with_browser(target):
+    """
+    Last-resort fallback for pages whose video only appears after running
+    JS -- find_video_url() above has no JS engine, so it can never see
+    those (its own docstring says so). Fire TV/Android can't run a
+    desktop-grade headless browser either, so this asks url-code-service
+    (already deployed, already always-on for the code-redirect feature) to
+    do it: it loads the page in real headless Chromium, runs its JS, and
+    watches what the page actually requests. Kodi still plays the resulting
+    direct URL with its own native player -- this doesn't stream a browser
+    tab into Kodi, it just extracts what a browser would have played.
+
+    Slower than the static pass (page load + JS settle time), so it's only
+    tried after find_video_url()/iframe-following both come up empty.
+    """
+    api_url = CODE_SERVICE_BASE + "/api/resolve_js?url=" + urllib.parse.quote(target, safe="")
+    try:
+        data = fetch_json(api_url, timeout=25)
+    except Exception:
+        return None
+    return data.get("stream_url")
+
+
 def resolve_url(target):
     """
     Entry point for "arbitrary URL sent from phone" flow: fetch whatever
@@ -295,7 +318,11 @@ def resolve_url(target):
                 iframe_html, iframe_final_url = fetch_html(iframe_url)
                 stream_url = find_video_url(iframe_html, iframe_final_url)
             except Exception:
-                pass  # iframe fetch failing just means we fall through to the "not found" case below
+                pass  # iframe fetch failing just means we fall through to the JS fallback below
+
+    if not stream_url:
+        xbmcgui.Dialog().notification("Scraper Tutorial", "Rendering page in a browser, this can take a few seconds...")
+        stream_url = resolve_url_with_browser(final_url)
 
     if not stream_url:
         xbmcgui.Dialog().notification("Scraper Tutorial", "No direct video found on that page")

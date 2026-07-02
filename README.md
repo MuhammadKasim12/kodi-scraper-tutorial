@@ -89,10 +89,12 @@ site-agnostic web patterns, checked in this order:
    page, fetch the first iframe's target and retry all of the above there.
 7. Bare `.m3u8` / `.mpd` (DASH) / `.mp4` links anywhere in the HTML/JS, as
    a last resort.
+8. If all of the above miss, a **headless-browser fallback** (Part 5 below)
+   — this is the only step with a real JS engine behind it.
 
-It's still a static-HTML technique — no JS engine, so it won't defeat DRM or
-sites that only expose video after running arbitrary JavaScript; those need
-a site-specific resolver, same as any real scraper add-on.
+Steps 1-7 are a static-HTML technique — no JS engine, so on their own they
+won't find video that only appears after running arbitrary JavaScript. Step
+8 covers that case; see Part 5 for how and why it runs where it does.
 
 No app to install and nothing to AirDrop to your phone — the control page
 is served directly by `url-code-service` (Part 4 below) at its `/` route
@@ -193,6 +195,55 @@ this first:**
 - If you want codes to survive restarts/redeploys entirely, swap the
   `_store` dict for a SQLite file (or a Fly volume) — a small change, but
   out of scope for this tutorial version.
+
+## Part 5: JS-rendered player fallback (headless browser)
+
+Steps 1-7 in Part 2 only look at the raw HTML/JS text a server sends back.
+Some players (a growing share of them) don't put a video URL in that text at
+all — they build it at runtime from JS (fetched fragments, base64-encoded
+strings, a separate XHR to a player API, etc.). No amount of regex on the
+raw response finds those; you need something that actually *runs* the page's
+JS and watches what it does, the same way a browser's devtools Network tab
+would show you the real request.
+
+`resolve_url()` now tries exactly that as a last resort, via a new
+`/api/resolve_js` endpoint on `url-code-service`:
+
+1. `addon.py` fetches the target with its regular static pass (steps 1-7).
+2. If nothing turns up, it calls `{CODE_SERVICE_BASE}/api/resolve_js?url=...`.
+3. That endpoint (`url-code-service/app.py`) opens the page in a real
+   **headless Chromium** (via Playwright), lets its JS run, and returns the
+   first direct video URL it sees — either a network request/response for a
+   media file, or a `<video>`/`<source>` element that only exists in the
+   post-JS DOM.
+4. `addon.py` hands that URL to Kodi's player exactly like any other
+   resolved stream.
+
+**Why this runs on the server, not on the Kodi device:** Fire TV/Android
+can't realistically run a desktop-grade headless browser, and even where it
+technically could, you'd rather not burn a set-top box's CPU on it. The
+server is already deployed and always-on (see Part 4's `min_machines_running`
+constraint), so it does the one-time heavy lifting; Kodi's own native player
+still does the actual video playback — hardware-accelerated, seekable,
+proper subtitles/audio-track support. This is *not* screen-mirroring a
+browser tab into Kodi — it extracts the same direct stream URL a browser
+would have played, then lets Kodi play that URL itself.
+
+**Cost/tradeoff of turning this on:**
+- The Docker image switches to `mcr.microsoft.com/playwright/python`, which
+  bundles Chromium + its OS dependencies — a notably bigger image and slower
+  build/deploy than the plain `python:3.11-slim` image Parts 1-4 used.
+- Pages that need this fallback take longer to resolve (page load + a JS
+  "settle" pause, up to ~15-20 seconds) than the instant static-regex path —
+  `addon.py` posts a Kodi notification before trying it so the UI doesn't
+  look frozen.
+- Still won't defeat actual DRM (Widevine/FairPlay-encrypted manifests) —
+  that requires license-key handling in Kodi itself (`inputstream.adaptive`),
+  out of scope here. This only reaches pages that hide a plain, unencrypted
+  stream behind JS, not ones that encrypt the stream itself.
+- If you redeploy your own `url-code-service` copy (Part 4), rebuilding with
+  the new Dockerfile is required before `/api/resolve_js` works — it isn't
+  optional to keep the old slim image and expect this endpoint to function.
 
 ## Legal note
 

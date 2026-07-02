@@ -1,10 +1,13 @@
 import os
 import random
+import re
 import threading
 import time
+from urllib.parse import urljoin
 
 from flask import Flask, request, jsonify, redirect, abort, render_template
 from flask_cors import CORS
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 app = Flask(__name__)
 CORS(app)  # lets the phone page call /shorten directly from the browser
@@ -81,6 +84,132 @@ def resolve_json(code):
         if entry is None or _is_expired(entry):
             return jsonify({"error": "not found or expired"}), 404
         return jsonify({"code": code, "url": entry["url"]})
+
+
+# ---------------------------------------------------------------------------
+# JS-rendering fallback for addon.py's resolve_url().
+#
+# addon.py's own regex-based find_video_url() has no JS engine, so it can't
+# see a video that only appears after a page's JS runs (a lot of embedded
+# players work this way). Fire TV/Android can't run a desktop-grade headless
+# browser either, so that JS execution has to happen somewhere with real
+# CPU/RAM -- this always-on Fly machine, which already exists for the
+# code-redirect feature. addon.py calls /api/resolve_js as a *last* resort,
+# after its own fast static-HTML pass and iframe-follow both fail; Kodi's own
+# player still does the actual playback (hardware-accelerated, seekable) --
+# this only replaces "guess the URL from raw HTML" with "watch what a real
+# browser's JS actually requests," not "stream a browser tab into Kodi."
+# ---------------------------------------------------------------------------
+
+_pw_lock = threading.Lock()
+_playwright = None
+_browser = None
+
+
+def _get_browser():
+    """Lazily launch one shared headless Chromium and reuse it across
+    requests -- launching Chromium from scratch (~1-2s) on every call would
+    make an already-slow fallback slower. Safe under gunicorn's required
+    single worker (see _store comment above): one process, one browser."""
+    global _playwright, _browser
+    with _pw_lock:
+        if _browser is None:
+            _playwright = sync_playwright().start()
+            _browser = _playwright.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+        return _browser
+
+
+_VIDEO_EXT_RE = re.compile(r"\.(?:mp4|m3u8|mpd)(?:[?#]|$)", re.IGNORECASE)
+_VIDEO_CONTENT_TYPES = (
+    "video/",
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "application/dash+xml",
+)
+
+# Same "last resort" static patterns as addon.py's find_video_url(), kept for
+# the case where the video shows up in the post-JS DOM rather than in a
+# network request the page fires.
+_STATIC_VIDEO_PATTERNS = [
+    r'<video[^>]*>\s*<source[^>]+src=["\']([^"\']+)["\']',
+    r'<video[^>]+src=["\']([^"\']+)["\']',
+    r'<meta[^>]+property=["\']og:video(?::(?:url|secure_url))?["\'][^>]+content=["\']([^"\']+)["\']',
+    r'<meta[^>]+name=["\']twitter:player:stream["\'][^>]+content=["\']([^"\']+)["\']',
+    r'\bdata-(?:src|video|url)=["\']([^"\']+?\.(?:mp4|m3u8|mpd)[^"\']*)["\']',
+    r'["\']?(?:file|src)["\']?\s*:\s*["\']([^"\']+?\.(?:mp4|m3u8|mpd)[^"\']*)["\']',
+    r'["\'](https?://[^"\'\s<>]+?\.m3u8[^"\'\s<>]*)["\']',
+    r'["\'](https?://[^"\'\s<>]+?\.mpd[^"\'\s<>]*)["\']',
+    r'["\'](https?://[^"\'\s<>]+?\.mp4[^"\'\s<>]*)["\']',
+]
+
+
+def _find_video_url_in_html(html, page_url):
+    for pattern in _STATIC_VIDEO_PATTERNS:
+        match = re.search(pattern, html, re.IGNORECASE)
+        if match:
+            return urljoin(page_url, match.group(1).replace("\\/", "/"))
+    return None
+
+
+def resolve_video_url_with_browser(url, nav_timeout_ms=15000, settle_ms=2000):
+    """Load `url` in real headless Chromium, run its JS, and return the
+    first direct video URL that surfaces -- either as a request/response for
+    a media file, or in the post-JS-rendered DOM. Returns (stream_url,
+    final_page_url); stream_url is None if nothing turned up."""
+    browser = _get_browser()
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 (KodiScraperTutorial/0.1; +browser-fallback)"
+    )
+    found = {"url": None}
+
+    def on_request(req):
+        if not found["url"] and _VIDEO_EXT_RE.search(req.url):
+            found["url"] = req.url
+
+    def on_response(resp):
+        if found["url"]:
+            return
+        ctype = resp.headers.get("content-type", "")
+        if any(ctype.startswith(t) for t in _VIDEO_CONTENT_TYPES) or _VIDEO_EXT_RE.search(resp.url):
+            found["url"] = resp.url
+
+    page = context.new_page()
+    page.on("request", on_request)
+    page.on("response", on_response)
+
+    final_url = url
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+        final_url = page.url
+        page.wait_for_timeout(settle_ms)  # let lazy-loaded players/XHRs fire
+        if not found["url"]:
+            found["url"] = _find_video_url_in_html(page.content(), final_url)
+    except PlaywrightTimeoutError:
+        pass  # partial navigation is fine -- use whatever we captured so far
+    finally:
+        context.close()
+
+    return found["url"], final_url
+
+
+@app.get("/api/resolve_js")
+def resolve_js():
+    target = (request.args.get("url") or "").strip()
+    if not target:
+        return jsonify({"error": "missing 'url'"}), 400
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+
+    try:
+        stream_url, final_url = resolve_video_url_with_browser(target)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+    if not stream_url:
+        return jsonify({"error": "no video found", "page_url": final_url}), 404
+    return jsonify({"stream_url": stream_url, "page_url": final_url})
 
 
 @app.get("/")
