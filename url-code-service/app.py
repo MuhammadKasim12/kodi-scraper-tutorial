@@ -3,11 +3,11 @@ import random
 import threading
 import time
 
-from flask import Flask, request, jsonify, redirect, abort
+from flask import Flask, request, jsonify, redirect, abort, render_template
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # lets mobile-remote.html call /shorten directly from the phone browser
+CORS(app)  # lets the phone page call /shorten directly from the browser
 
 # _store lives in this process's memory, not a shared backend -- must run as
 # exactly one gunicorn worker / one Fly machine, or a code minted by one
@@ -84,6 +84,13 @@ def resolve_json(code):
 
 
 @app.get("/")
+def index():
+    """No-install phone control page -- open this URL directly on the
+    phone's browser, nothing to download or sideload."""
+    return render_template("index.html")
+
+
+@app.get("/health")
 def health():
     with _lock:
         _purge_expired()

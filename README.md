@@ -77,10 +77,19 @@ It's a last-resort, site-agnostic technique — it won't defeat DRM, obfuscated
 JS players, or third-party embeds (YouTube/Vimeo iframes etc.); those need a
 site-specific resolver, same as any real scraper add-on.
 
-`mobile-remote.html` is a single static page — open it in your phone's
-browser (AirDrop/email it to the phone, or serve it from any static host) —
-that lets you type a URL and push it to Kodi over your **local network**
-using Kodi's built-in JSON-RPC API. No server of your own required.
+No app to install and nothing to AirDrop to your phone — the control page
+is served directly by `url-code-service` (Part 4 below) at its `/` route
+(`url-code-service/templates/index.html`). Just open
+**http://kasim-url-code-svc.fly.dev** in your phone's browser (bookmark it).
+It lets you type a URL and push it to Kodi over your **local network** using
+Kodi's built-in JSON-RPC API.
+
+**Use `http://`, not `https://`, for this page specifically.** The page
+makes a plain-HTTP request to Kodi's local JSON-RPC endpoint, and phone
+browsers block that as "mixed content" if the page itself loaded over
+HTTPS. The service intentionally allows plain HTTP (`force_https = false`
+in `fly.toml`) so this works — the page itself detects and warns if you
+loaded it over HTTPS by mistake.
 
 Setup:
 
@@ -89,8 +98,9 @@ Setup:
    set a username/password there, remember them.
 2. Find the Kodi device's local IP (Settings -> System info -> Network, or
    check your router's client list).
-3. On your phone, open `mobile-remote.html`, enter `<ip>:8080` as the host
-   (and credentials if you set any), paste a page URL, tap **Send to TV**.
+3. On your phone, open `http://kasim-url-code-svc.fly.dev`, enter
+   `<ip>:8080` as the host (and credentials if you set any), paste a page
+   URL, tap **Send to TV**.
 4. Kodi calls `Player.Open` on `plugin://plugin.video.scrapertutorial/?action=resolve_url&target=...`,
    which runs `resolve_url()` in `addon.py` and plays whatever direct video
    URL it finds.
@@ -127,9 +137,9 @@ deploy path you already use). It owns a 5-digit numeric code space:
   space (`00000`–`99999`) never fills up for personal use.
 
 **Already deployed** at `https://kasim-url-code-svc.fly.dev` (Fly.io, `sjc`
-region) — `addon.py`'s `CODE_SERVICE_BASE` already points at it, so you can
-skip straight to entering that same URL in `mobile-remote.html`'s
-"url-code-service URL" field. To redeploy your own copy instead:
+region) — it also serves the phone control page itself (see Part 2 above),
+and `addon.py`'s `CODE_SERVICE_BASE` already points at it. To redeploy your
+own copy instead:
 
 ```bash
 cd url-code-service
@@ -140,8 +150,9 @@ Then wire the other two pieces to it:
 
 1. In `plugin.video.scrapertutorial/addon.py`, set `CODE_SERVICE_BASE` to
    your deployed URL.
-2. In `mobile-remote.html`, enter that same URL in the **"url-code-service
-   URL"** field (persisted locally on your phone).
+2. Open `http://your-app-name.fly.dev` on your phone — the "url-code-service
+   URL" field defaults to wherever the page itself is hosted, so this
+   usually needs no manual entry.
 
 Flow end-to-end: paste a long URL into `mobile-remote.html` → tap **"Get code
 for Page URL"** → it POSTs to `/shorten` and shows a 5-digit code → walk to

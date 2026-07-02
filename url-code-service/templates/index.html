@@ -19,6 +19,14 @@
     right to access.
   </p>
 
+  <div id="mixedContentWarning" style="display:none;font-size:0.8rem;color:#8a5a00;background:#fff8e6;border:1px solid #f0c36d;padding:0.5rem;border-radius:6px;">
+    This page loaded over HTTPS. Your phone's browser will likely block
+    "Send to TV" below, because it's a plain-HTTP request to Kodi and
+    HTTPS pages aren't allowed to make those. Reload this same page using
+    <code>http://</code> instead of <code>https://</code> to fix it — the
+    "Get code" button is unaffected either way.
+  </div>
+
   <label>Kodi host (IP:port, e.g. 192.168.1.50:8080)</label>
   <input id="host" placeholder="192.168.1.50:8080">
 
@@ -39,24 +47,30 @@
 
   <h3>Get a 5-digit code to type on the remote</h3>
   <p style="font-size:0.8rem;color:#666;">
-    Calls your own url-code-service (see url-code-service/ folder) to turn
-    the "Page URL" above into a 5-digit numeric code. Type just that code
-    into Kodi's "[Enter URL manually]" menu instead of a full URL — far
-    faster on a D-pad remote. Each code frees up for reuse after 7 days.
+    Turns the "Page URL" above into a 5-digit numeric code via this same
+    service. Type just that code into Kodi's "[Enter URL manually]" menu
+    instead of a full URL — far faster on a D-pad remote. Each code frees
+    up for reuse after 7 days.
   </p>
 
-  <label>url-code-service URL (where you deployed it, e.g. https://your-app.fly.dev)</label>
+  <label>url-code-service URL</label>
   <input id="codeService" placeholder="https://your-app.fly.dev">
 
   <button onclick="shorten()">Get code for "Page URL" above</button>
   <div id="shortStatus"></div>
 
 <script>
-// Values persist locally on this phone only.
+// Values persist locally on this phone only. codeService defaults to
+// wherever this page itself is hosted, since it's served by the same
+// Flask app as the /shorten endpoint.
 for (const id of ["host", "user", "pass", "codeService"]) {
   const el = document.getElementById(id);
-  el.value = localStorage.getItem(id) || "";
+  el.value = localStorage.getItem(id) || (id === "codeService" ? window.location.origin : "");
   el.addEventListener("change", () => localStorage.setItem(id, el.value));
+}
+
+if (window.location.protocol === "https:") {
+  document.getElementById("mixedContentWarning").style.display = "block";
 }
 
 async function send() {
@@ -99,7 +113,7 @@ async function send() {
   } catch (e) {
     status.textContent =
       "Request failed: " + e.message +
-      "\n\nCheck: phone and TV on same Wi-Fi, Kodi web server enabled, IP:port correct.";
+      "\n\nCheck: phone and TV on same Wi-Fi, Kodi web server enabled, IP:port correct, and (if this page loaded over https) reload it over http instead.";
   }
 }
 
