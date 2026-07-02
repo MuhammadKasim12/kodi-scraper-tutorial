@@ -4,8 +4,8 @@
 > This project exists to teach the mechanics of Kodi scraper/video add-ons
 > (routing, fetching, parsing, resolving, remote control via JSON-RPC). It
 > is wired up against archive.org's public-domain catalog specifically so
-> it's legal to run as-is. The generic `resolve_url` action and
-> `mobile-remote.html` are general-purpose tools — pointing them at content
+> it's legal to run as-is. The generic `resolve_url` action and the phone
+> control page (Part 2) are general-purpose tools — pointing them at content
 > you don't have the legal right to access (copyrighted streams, sites that
 > prohibit scraping in their ToS, etc.) is your responsibility and may be
 > illegal in your jurisdiction. Do not use this to infringe copyright.
@@ -154,8 +154,8 @@ Then wire the other two pieces to it:
    URL" field defaults to wherever the page itself is hosted, so this
    usually needs no manual entry.
 
-Flow end-to-end: paste a long URL into `mobile-remote.html` → tap **"Get code
-for Page URL"** → it POSTs to `/shorten` and shows a 5-digit code → walk to
+Flow end-to-end: paste a long URL into the phone page (Part 2) → tap **"Get
+code for Page URL"** → it POSTs to `/shorten` and shows a 5-digit code → walk to
 the TV, open the add-on's **"[Enter URL manually]"** item, type the 5 digits
 → Kodi hits `CODE_SERVICE_BASE/<code>`, gets redirected, scrapes, plays.
 
