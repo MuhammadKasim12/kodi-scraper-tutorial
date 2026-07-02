@@ -12,4 +12,8 @@ ENV PORT=8080
 EXPOSE 8080
 # --timeout 120: the /api/resolve_js JS-rendering fallback needs headroom
 # beyond gunicorn's 30s default (page load + JS settle time can take ~15-20s).
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120", "app:app"]
+# --access-logfile/--error-logfile -: without these, gunicorn logs nothing
+# per-request, so `fly logs` shows machine boot events but zero trace of
+# what any actual request (or app.logger call) did.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120", \
+     "--access-logfile", "-", "--error-logfile", "-", "app:app"]

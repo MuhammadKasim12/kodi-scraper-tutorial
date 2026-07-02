@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 import re
@@ -11,6 +12,13 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 app = Flask(__name__)
 CORS(app)  # lets the phone page call /shorten directly from the browser
+
+# gunicorn's --access-logfile/--error-logfile (see Dockerfile) capture
+# request/error lines through the root logger; this just makes sure our own
+# app.logger.* calls actually reach stdout (and therefore `fly logs`) instead
+# of being silently dropped, which is what was happening before -- there was
+# no way to see what /api/resolve_js actually did for a given request.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # _store lives in this process's memory, not a shared backend -- must run as
 # exactly one gunicorn worker / one Fly machine, or a code minted by one
@@ -180,17 +188,22 @@ def resolve_video_url_with_browser(url, nav_timeout_ms=15000, settle_ms=2000):
     page.on("response", on_response)
 
     final_url = url
+    nav_error = None
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
         final_url = page.url
         page.wait_for_timeout(settle_ms)  # let lazy-loaded players/XHRs fire
         if not found["url"]:
             found["url"] = _find_video_url_in_html(page.content(), final_url)
-    except PlaywrightTimeoutError:
-        pass  # partial navigation is fine -- use whatever we captured so far
+    except PlaywrightTimeoutError as e:
+        nav_error = str(e)  # partial navigation is fine -- use whatever we captured so far
     finally:
         context.close()
 
+    logging.info(
+        "resolve_video_url_with_browser url=%s final_url=%s found=%s nav_timeout=%s",
+        url, final_url, found["url"], bool(nav_error),
+    )
     return found["url"], final_url
 
 
@@ -202,13 +215,18 @@ def resolve_js():
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
 
+    logging.info("resolve_js request target=%s", target)
     try:
         stream_url, final_url = resolve_video_url_with_browser(target)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+    except Exception:
+        logging.exception("resolve_js failed for target=%s", target)
+        return jsonify({"error": "browser resolution failed, see server logs"}), 502
 
     if not stream_url:
+        logging.info("resolve_js no video found target=%s final_url=%s", target, final_url)
         return jsonify({"error": "no video found", "page_url": final_url}), 404
+
+    logging.info("resolve_js success target=%s stream_url=%s", target, stream_url)
     return jsonify({"stream_url": stream_url, "page_url": final_url})
 
 
