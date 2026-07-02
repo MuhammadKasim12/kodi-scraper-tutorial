@@ -126,17 +126,20 @@ deploy path you already use). It owns a 5-digit numeric code space:
   purges expired entries before picking a new random code, so the 100,000-code
   space (`00000`–`99999`) never fills up for personal use.
 
-Deploy it (Fly.io shown, Render/anything-that-runs-Docker works the same):
+**Already deployed** at `https://kasim-url-code-svc.fly.dev` (Fly.io, `sjc`
+region) — `addon.py`'s `CODE_SERVICE_BASE` already points at it, so you can
+skip straight to entering that same URL in `mobile-remote.html`'s
+"url-code-service URL" field. To redeploy your own copy instead:
 
 ```bash
 cd url-code-service
-fly launch --copy-config --now   # or: fly deploy, after `fly apps create`
+fly launch --copy-config --now --name your-app-name
 ```
 
 Then wire the other two pieces to it:
 
 1. In `plugin.video.scrapertutorial/addon.py`, set `CODE_SERVICE_BASE` to
-   your deployed URL (e.g. `https://url-code-service.fly.dev`).
+   your deployed URL.
 2. In `mobile-remote.html`, enter that same URL in the **"url-code-service
    URL"** field (persisted locally on your phone).
 
@@ -145,11 +148,23 @@ for Page URL"** → it POSTs to `/shorten` and shows a 5-digit code → walk to
 the TV, open the add-on's **"[Enter URL manually]"** item, type the 5 digits
 → Kodi hits `CODE_SERVICE_BASE/<code>`, gets redirected, scrapes, plays.
 
-**Caveat:** the code store is in-memory only — a service restart (common on
-free tiers that spin down idle instances) wipes all codes. Fine for
-"shorten it, then use it within the next few minutes" workflows; if you want
-codes to survive restarts, swap the `_store` dict for a SQLite file, which is
-a small change but out of scope for this tutorial version.
+**Two constraints from the in-memory store — don't change without fixing
+this first:**
+- **Exactly one process must serve the app.** `Dockerfile`/`Procfile` run
+  gunicorn with `--workers 1` on purpose — with 2+ workers, `/shorten` and
+  the redirect lookup can land on different OS processes with independent
+  memory, so a freshly-minted code 404s about half the time. Same logic
+  applies to Fly machine count: `fly scale count 1`, not 2+.
+- **The machine must stay running.** `fly.toml` sets
+  `auto_stop_machines = 'off'` / `min_machines_running = 1` on purpose —
+  Fly's default scale-to-zero behavior powers the machine off between
+  requests to save cost, which wipes the in-memory dict just as thoroughly
+  as a worker mismatch does. The tradeoff: the machine runs continuously
+  instead of scaling to zero, which is the right call for a personal tool
+  this light but is worth knowing if you're watching free-tier hours.
+- If you want codes to survive restarts/redeploys entirely, swap the
+  `_store` dict for a SQLite file (or a Fly volume) — a small change, but
+  out of scope for this tutorial version.
 
 ## Legal note
 

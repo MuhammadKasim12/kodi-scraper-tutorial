@@ -9,6 +9,10 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)  # lets mobile-remote.html call /shorten directly from the phone browser
 
+# _store lives in this process's memory, not a shared backend -- must run as
+# exactly one gunicorn worker / one Fly machine, or a code minted by one
+# process is invisible to whichever process serves the redirect.
+
 CODE_LENGTH = 5
 CODE_MAX = 10 ** CODE_LENGTH - 1
 RECYCLE_AFTER_SECONDS = 7 * 24 * 60 * 60  # a code frees up for reuse after a week

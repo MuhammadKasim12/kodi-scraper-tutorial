@@ -38,7 +38,7 @@ USER_AGENT = "Mozilla/5.0 (KodiScraperTutorial/0.1)"
 
 # Base URL of your deployed url-code-service (see url-code-service/ folder).
 # A typed 5-digit code is resolved as f"{CODE_SERVICE_BASE}/{code}".
-CODE_SERVICE_BASE = "https://YOUR-SERVICE.fly.dev"
+CODE_SERVICE_BASE = "https://kasim-url-code-svc.fly.dev"
 
 # A few curated archive.org collections to browse as "categories".
 COLLECTIONS = [
